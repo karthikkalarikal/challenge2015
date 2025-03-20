@@ -24,7 +24,7 @@ func GetByURL(url string, target any) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden {
+	if resp.StatusCode == http.StatusForbidden {
 
 		return fmt.Errorf("access denied for URL: %s", url)
 

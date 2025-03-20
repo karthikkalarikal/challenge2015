@@ -1,5 +1,7 @@
 package main
 
-func main() {
+import "github.com/karthikkalarikal/Qube/cmd"
 
+func main() {
+	cmd.Execute()
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/karthikkalarikal/Qube/models"
+	"github.com/karthikkalarikal/Qube/pkg/traversal"
 	"github.com/karthikkalarikal/Qube/pkg/util"
 	"github.com/spf13/cobra"
 )
@@ -33,21 +34,25 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVarP(&actor1, "actor1", "a", "", "name an actor/celeb")
 	rootCmd.PersistentFlags().StringVarP(&actor2, "actor2", "b", "", "name an actor/celeb")
-	rootCmd.PersistentFlags().UintVarP(&separation, "separation", "s", 3, "separation between the actors/celebs")
+	// rootCmd.PersistentFlags().UintVarP(&separation, "separation", "s", 3, "separation between the actors/celebs")
 
 }
 
 func generate(_ *cobra.Command, args []string) {
 	config := models.Config{
-		Actor1:     actor1,
-		Actor2:     actor2,
-		Separation: separation,
+		Actor1: actor1,
+		Actor2: actor2,
+		// Separation: separation,
 	}
-	var tar models.Actor
-	err := util.GetByURL(config.Actor1, &tar)
-	if err != nil {
-		log.Println(err)
+
+	if err := util.Exists(config.Actor1); err != nil {
+		log.Printf("the name of the actor1: %s is incorrect %v", actor1, err)
 		os.Exit(1)
 	}
-	log.Println(tar)
+	if err := util.Exists(config.Actor2); err != nil {
+		log.Printf("the name of the actor2: %s is incorrect %v", actor2, err)
+		os.Exit(1)
+	}
+
+	traversal.NewNode(config.Actor1, config.Actor2)
 }

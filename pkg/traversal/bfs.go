@@ -1,6 +1,7 @@
 package traversal
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -23,101 +24,138 @@ func NewNode(start, target string) {
 
 func bfs(start, end string) *Node {
 	var visited sync.Map
-	mu := sync.Mutex{}
-	wg := sync.WaitGroup{}
-	gofer := make(chan struct{}, 10)
-	queue := make([]Node, 1)
-	queue[0] = Node{Entity: start, Type: "person"}
+	var once sync.Once
+	var wg sync.WaitGroup
 
-	for len(queue) > 0 {
-		l := len(queue)
-		for i := 0; i < l; i++ {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-			current := queue[0]
-			queue = queue[1:]
-			log.Println(current.Entity, " ", current.Type)
-			if current.Entity == end {
-				return &current
-			}
-			visited.Store(current.Entity, true)
-			wg.Add(1)
-			gofer <- struct{}{}
-			go func(current Node) {
-				defer func() {
-					wg.Done()
-					<-gofer
-				}()
+	type safeQueue struct {
+		mu    sync.Mutex
+		cond  *sync.Cond
+		items []Node
+	}
+
+	queue := &safeQueue{items: make([]Node, 0)}
+	queue.cond = sync.NewCond(&queue.mu)
+	result := make(chan *Node, 1)
+
+	// Initialize queue with start node
+	queue.mu.Lock()
+	queue.items = append(queue.items, Node{Entity: start, Type: "person"})
+	queue.cond.Signal()
+	queue.mu.Unlock()
+
+	worker := func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				queue.mu.Lock()
+				// Wait for work or cancellation
+				for len(queue.items) == 0 {
+					if ctx.Err() != nil {
+						queue.mu.Unlock()
+						return
+					}
+					queue.cond.Wait()
+				}
+				// Dequeue node
+				current := queue.items[0]
+				queue.items = queue.items[1:]
+				queue.mu.Unlock()
+
+				// Skip if already processed
+				if _, loaded := visited.LoadOrStore(current.Entity, true); loaded {
+					continue
+				}
+
+				// Early termination check
+				if current.Entity == end {
+					once.Do(func() {
+						result <- &current
+						cancel()
+					})
+					return
+				}
+
+				// Process node
 				if current.Type == "person" {
 					var person models.Actor
-
 					if err := util.GetByURL(current.Entity, &person); err != nil {
-						visited.Store(current.Entity, true)
-						log.Printf("Skipping inaccessible node: %s (%v)", current.Entity, err)
-
+						// Unmark visited to allow retries
+						log.Printf("Retryable error on %s: %v", current.Entity, err)
+						continue
 					}
-
+					// Enqueue children without visited checks
 					for _, credit := range person.Movies {
-						node := Node{
+						child := Node{
 							Entity: credit.URL,
 							Type:   "movie",
 							From:   &current,
 							Link:   "Movie: " + credit.Name + " (" + credit.Role + ")",
 						}
-
-						if _, ok := visited.Load(credit.URL); !ok {
-							mu.Lock()
-							queue = append(queue, node)
-							mu.Unlock()
-						}
+						queue.mu.Lock()
+						queue.items = append(queue.items, child)
+						queue.cond.Signal()
+						queue.mu.Unlock()
 					}
 				} else {
 					var movie models.Movie
-
 					if err := util.GetByURL(current.Entity, &movie); err != nil {
-						visited.Store(current.Entity, true)
-						log.Printf("Skipping inaccessible node: %s (%v)", current.Entity, err)
-
+						log.Printf("Retryable error on %s: %v", current.Entity, err) //since some of the links are not accessible, the retry logic is removed.
+						continue
 					}
 
-					log.Println(movie.URL)
 					for _, cast := range movie.Cast {
-
-						node := Node{
+						child := Node{
 							Entity: cast.URL,
 							Type:   "person",
 							From:   &current,
 							Link:   "Cast: " + cast.Name + " (" + cast.Role + ")",
 						}
-						if _, ok := visited.Load(cast.URL); !ok {
-							mu.Lock()
-							queue = append(queue, node)
-							mu.Unlock()
-						}
-
+						queue.mu.Lock()
+						queue.items = append(queue.items, child)
+						queue.cond.Signal()
+						queue.mu.Unlock()
 					}
 					for _, crew := range movie.Crew {
-
-						node := Node{
+						child := Node{
 							Entity: crew.URL,
 							Type:   "person",
 							From:   &current,
 							Link:   "Crew: " + crew.Name + " (" + crew.Role + ")",
 						}
-
-						if _, ok := visited.Load(crew.URL); !ok {
-							mu.Lock()
-							queue = append(queue, node)
-							mu.Unlock()
-						}
+						queue.mu.Lock()
+						queue.items = append(queue.items, child)
+						queue.cond.Signal()
+						queue.mu.Unlock()
 					}
 				}
-			}(current)
+			}
 		}
-		wg.Wait()
-
 	}
-	return nil
 
+	// Start workers
+	numWorkers := 30
+	wg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		go worker()
+	}
+
+	go func() {
+		wg.Wait()
+		once.Do(func() { close(result) })
+	}()
+
+	select {
+	case res := <-result:
+		return res
+	case <-ctx.Done():
+		return nil
+	}
 }
 
 func printPath(node *Node) {

@@ -10,7 +10,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-var limiter = rate.NewLimiter(rate.Every(time.Second/5), 3)
+var limiter = rate.NewLimiter(rate.Every(1*time.Millisecond), 1000)
 
 // fetch resources
 func GetByURL(url string, target any) error {

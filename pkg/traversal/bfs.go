@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/karthikkalarikal/Qube/models"
@@ -40,7 +41,6 @@ func bfs(start, end string) *Node {
 	queue.cond = sync.NewCond(&queue.mu)
 	result := make(chan *Node, 1)
 
-	// Initialize queue with start node
 	queue.mu.Lock()
 	queue.items = append(queue.items, Node{Entity: start, Type: "person"})
 	queue.cond.Signal()
@@ -85,11 +85,13 @@ func bfs(start, end string) *Node {
 				if current.Type == "person" {
 					var person models.Actor
 					if err := util.GetByURL(current.Entity, &person); err != nil {
-						// Unmark visited to allow retries
+						if checkErrorForbidden(err) {
+							visited.Delete(current.Entity)
+						}
 						log.Printf("Retryable error on %s: %v", current.Entity, err)
 						continue
 					}
-					// Enqueue children without visited checks
+
 					for _, credit := range person.Movies {
 						child := Node{
 							Entity: credit.URL,
@@ -105,7 +107,10 @@ func bfs(start, end string) *Node {
 				} else {
 					var movie models.Movie
 					if err := util.GetByURL(current.Entity, &movie); err != nil {
-						log.Printf("Retryable error on %s: %v", current.Entity, err) //since some of the links are not accessible, the retry logic is removed.
+						if checkErrorForbidden(err) {
+							visited.Delete(current.Entity)
+						}
+						log.Printf("Retryable error on %s: %v", current.Entity, err) //since some of the links are not accessible, the retry logic is specific.
 						continue
 					}
 
@@ -176,4 +181,8 @@ func printPath(node *Node) {
 			fmt.Printf("%d. %s\n", i+1, n.Link)
 		}
 	}
+}
+
+func checkErrorForbidden(err error) bool {
+	return strings.Contains(err.Error(), "access denied for URL:")
 }
